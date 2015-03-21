@@ -1,0 +1,6 @@
+#ignore .asv files
+*.asv
+*.mexw64
+
+#ignore codegen files
+codegen/
