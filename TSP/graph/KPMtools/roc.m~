@@ -1,0 +1,58 @@
+function [falseAlarms, detections, area, th] = plotROC(confidence, testClass)
+% Based on algorithms from Tom Fawcett's paper "ROC Graphs: Notes and
+% Practical Considerations for Data Mining Researchers" (2003)
+%
+% You pass the scores and the classes, and the function returns the false
+% alarm rate and the detection rate for different points across the ROC.
+%
+% [faR, dR] = plotROC(score, class)
+%
+%  faR (false alarm rate) is uniformly sampled from 0 to 1
+%  dR (detection rate) is computed using the scores.
+%
+% class = 0 => target absent
+% class = 1 => target present
+%
+% faR, dR are size 1x1250
+
+% sort test classes by confidence scores
+S = rand('state');
+rand('state',0);
+confidence = confidence + rand(size(confidence))*10^(-10);
+rand('state',S)
+[th j] = sort(confidence, 'descend');
+testClass = testClass(j);
+
+% expand the length of scores and class labels to N
+th = th(fix(linspace(1, length(th), 1250))); 
+testClass = testClass(fix(linspace(1, length(testClass), 1250))); 
+
+area = 0;
+fa = 0;
+tp = 0;
+falseAlarms = [0];
+detections = [0];
+fPrev = -inf;
+faPrev = 0;
+tpPrev = 0;
+
+P = max(size(find(testClass==1)));
+N = max(size(find(testClass==0)));
+
+for i=1:1250
+    if th(i) ~= fPrev
+        falseAlarms = [falseAlarms fa];
+        detections = [detections tp/P];
+        area = area + polyarea([faPrev faPrev fa/N fa/N],[0 tpPrev tp/P 0]);
+        fPrev = th(i);
+        faPrev = fa/N;
+        tpPrev = tp/P;
+    end
+    if testClass(i) == 1
+        tp = tp + 1;
+    else
+        fa = fa + 1;
+    end
+end
+
+sort(th);

@@ -1,0 +1,421 @@
+classdef LocalAgent < Agent
+    %LOCAL AGENT Subclass of Agent - 
+    %
+    % Written by David Pike - David.Pike@rmc.ca
+    % September 16, 2011
+    
+    properties
+
+        D;                      %Immediate demand
+        D_HAT;
+        D_received;             %Demand received from neighbours
+        LOCAL_DEMAND;           %Local demand
+        D_GLOBAL;               %Local realization of global demand
+        D_EXTERNAL;
+        D_INTERNAL;             %
+        
+        B;                      %Targets serviced
+        B_INDEX;                %Array of indices serviced
+        SERVICED_INDICES = [];
+        
+        C_GLOBAL;               %Global exploration points for environment
+                                %TargetPoint objects with POI value 0
+        C_LOCAL;                %Local exploration responsibility
+                                %TargetPoint objects with POI value 0
+                                
+        C_str;                  %bit string representing points in C_GLOBAL contained in C_LOCAL
+        
+        C_current;
+        d;                      
+        
+        LRT = 0;                %time value representing last time exploration points were fully reset
+        
+                                %Buffers should be clear at the beginning
+                                %of each timestep to be populated by
+                                %collaborate and senseTargets
+        
+        EXP_STR;                %Explore points buffer for communication                        
+        SENSED_TARGETS;         %Targets picked up within R_SENSE
+        RECEIVED_TARGETS;       %Targets received through collaboration
+                                %To be consolidated with D and B after
+                                %every timestep then cleared
+        
+        R_SENSE;                %Sensing radius of robot
+        R_COMM;                 %Communication radius of robot
+        FLAG_NEW_INFO = 1;      %Flag indicating new information was received 
+                                %through sensing (SenseTargets) or collaboration
+                                
+        D_AGENT;                %Dummy agent used to calculate Rathinam tour
+    end
+    
+    methods
+        function obj = LocalAgent()
+            %constructor
+            obj = obj@Agent();
+            %set explore points
+            
+
+            
+        end
+        
+        function obj = Service_Target(obj, target)
+
+            global targets targetsServiced
+            
+            %Check to ensure target has not already been serviced
+            CURRENT_UID = target.UID;
+            current_target = findTargetFromUID(targets,CURRENT_UID);
+            
+            %Verify target being serviced is first one in LOCAL_DEMAND
+            if ~isempty(obj.D)
+                if CURRENT_UID == obj.D(1).UID
+                    %current_target = findTargetFromUID(targets,CURRENT_UID);
+                    %fprintf('Robot %d servicing target %d\n',obj.ROBOT_INDEX,CURRENT_UID);
+
+                    if (current_target.serviced == 0);
+
+                        %Add target to B
+                        obj.D(1).serviced = 1;
+                        obj.B = [obj.B; obj.D(1)];
+                        obj.SERVICED_INDICES = [obj.SERVICED_INDICES; obj.D(1).UID];    
+
+                        %Remove target from local demand
+                        obj.D(1) = [];
+                        targetsServiced = targetsServiced + 1;
+
+
+                    else%otherwise????
+                        obj.D(1).serviced = 1;
+                        obj.B = [obj.B; obj.D(1)];
+                        obj.D(1) = [];
+                        targetsServiced = targetsServiced + 1;
+                        %wtf, why did you send me here?
+                    end
+
+                else%target being serviced is not that of current tour, accidently landed here?????
+                    %Need to find entry for current target being serviced
+                end%if
+                
+            else %Demand empty, came across target in service radius
+                obj.B = [obj.B; target];
+                obj.SERVICED_INDICES = [obj.SERVICED_INDICES; target.UID];
+                targetsServiced = targetsServiced + 1;
+            end
+            
+            
+        end%function
+        
+        function obj = TourCalculation(obj,t)
+            
+            %D-         set of demands that must be serviced
+            %D_GLOBAL-  total set of known demands
+            %Ensure D and D_GLOBAL are disjoint
+            %fprintf('Analyzing TCR for robot %d\n',obj.ROBOT_INDEX);
+            
+
+            if ~isempty(obj.D)%D not empty, consider D_GLOBAL after tour
+                
+                %fprintf('First "if": D has entries\n');
+                
+                %Consider points in D_GLOBAL
+                %Find time_t and position_h
+                if ~isempty(obj.D_GLOBAL)
+                    
+                    time_h = obj.D(end).EXPECTED_SERVICE_TIME;
+                    position_h = obj.D(end).position;
+                    
+                    %set obj position to position holder for Rathinam
+                    %method
+                    %Save VEHICLE position to reassign after Rathinam
+                    %method
+                    obj.D_AGENT.position = position_h;
+                    VEHICLE_POSITION = obj.position;
+                    obj.position = position_h;
+                    obj.D_GLOBAL = Rathinam1(obj,obj.D_GLOBAL);
+                    
+                    %Set vehicle position back to true position
+                    obj.position = VEHICLE_POSITION;
+                    %Check if any targets in D_GLOBAL can be serviced faster
+                    %than current EST
+                
+                    [D_first,D_last] = UpdateRoutingTable(obj.D_GLOBAL,time_h,position_h,obj.velMag);
+                
+                    obj.D = addTarget(obj.D,D_first,obj.ROBOT_INDEX);
+                    %Remove repeats
+                    obj.D_GLOBAL = addTarget(obj.D_GLOBAL,D_last,obj.ROBOT_INDEX);
+                    %Remove repeats
+                end
+
+                
+            elseif ~isempty(obj.D_GLOBAL)
+                
+                %fprintf('Second "if": D empty, D_GLOBAL has entries\n');
+                
+                %D is empty, D_GLOBAL has entries
+                %consider all points in D_GLOBAL equally
+                obj.D_GLOBAL = Rathinam1(obj,obj.D_GLOBAL);
+                %Remove targets from D which can be serviced faster
+                %externally
+                [obj.D,obj.D_GLOBAL] = UpdateRoutingTable(obj.D_GLOBAL,t,obj.position,obj.velMag);
+                
+            else
+                %Explore
+                %create explore set for 1-TOUR
+                
+                %obj.setLocalExpTour();
+                %follow next point in tour
+                
+                %Find point in C to head to
+                %fprintf('Third "if": D, D_GLOBAL empty!\n');
+                %D,D_GLOBAL are empty, nothing to do
+                
+            end
+           
+        end
+        
+        function obj = Update_Velocity(obj)
+            %called at each time step to update robot's velocity and
+            %direction
+            %Check to ensure next target isn't being serviced faster
+%             while (obj.D(1).EXPECTED_SERVICE_TIME < obj.D(1).LOCAL_SERVICE_TIME && ~isempty(obj.D))
+%                 obj.D(1) = [];
+%             end
+
+            global areaSize
+            
+            % follow tour
+            if ~isempty(obj.D)
+                
+                % set direction to next target
+                target = obj.D(1);
+%                 vel = target.position - obj.position;
+%                 obj.velocity = vel/norm(vel);
+%                 obj.velMag = obj.agentVelocity;
+                
+%             elseif (obj.position(1) <= -areaSize/2) || (obj.position(1)>= areaSize/2) ||... 
+%                     (obj.position(2) <=-areaSize/2) || (obj.position(2)>=areaSize/2) %check if agent is out of bounds
+%                 
+%                 %fprintf('Robot %d out of bounds, choose new heading\n',obj.ROBOT_INDEX);
+%                 %choose new orientation
+%                 point = rand(1,2)*areaSize - areaSize/2;
+% %                 vel = point - obj.position;
+% %                 obj.velocity = vel/norm(vel);
+% %                 obj.velMag = obj.agentVelocity;
+                
+            else
+                target = obj.C_LOCAL(obj.C_current);
+%                 vel = target.position - obj.position;
+%                 obj.velocity = vel/norm(vel);
+%                 obj.velMag = obj.agentVelocity;
+                %obj.velMag = 0;
+                %Exploration maneuver
+                %fprintf('Local demand empty for robot %d, proceed to explore!\n',obj.ROBOT_INDEX);
+                %choose random heading???           
+                
+
+            end
+            
+            %Update velocity
+            vel = target.position - obj.position;
+            obj.velocity = vel/norm(vel);
+            obj.velMag = obj.agentVelocity;
+            
+            
+            
+        end % function
+        
+        function obj = OptimizeTour(obj)
+            
+            %Optimize tour of local known demand - for now Christofides
+            %algorithm
+            if (size(obj.D,1) > 1 && size(obj.D,2 > 0))
+                size_demand = size(obj.D,1);
+                obj.D = Rathinam1(obj,obj.D);
+                size_demand2 = size(obj.D,1);
+                
+                if size_demand ~= size_demand2
+                    fprintf('Warning: OptimizeTour adding targets to robot %d\n',obj.ROBOT_INDEX);
+                end
+            end
+            
+        end %function
+        
+        function obj = SenseTargets(obj)
+
+            global targets
+            %Check if any global targets are within R_SENSE of agent
+            %fprintf('Checking %d global targets\n',size(targets,1));
+            
+            for i=1:size(targets,1);%iterate through targets
+                
+                %Check if target position is within R_SENSE
+                if (Distance(targets(i).position,obj.position) <= obj.R_SENSE && targets(i).serviced == 0);
+                    
+                    obj.SENSED_TARGETS = addTarget(obj.SENSED_TARGETS,targets(i),obj.ROBOT_INDEX);
+
+                end %if
+            end %for
+            
+        end%function
+        
+        function obj = hasArrived(obj)
+            
+            global targets
+            
+            %Exploring or not exploring?
+            if ~isempty(obj.D)
+                if Distance(obj.position,obj.D(1).position) <= obj.D(1).serviceRadius
+                    %Has target been serviced?
+                    if targets(obj.D(1).UID).serviced == 1
+                        %Remove from local demand
+                        obj.D(1) = [];
+                    else
+                        %service target???? should have been done in
+                        %CheckTargetRadius
+                        throw(MException('LocalAgent:hasArrived','hasArrived function error'));
+                    end
+                end
+            else
+                %Exploring, check if exploration point is reached
+                if Distance(obj.position, obj.C_LOCAL(obj.C_current).position) <= obj.C_LOCAL(obj.C_current).serviceRadius
+                    %Add/Remove C_current from C_LOCAL, continue exploring
+                    obj.C_current = mod(obj.C_current,obj.d) + 1;
+                end
+                
+            end
+                
+            
+%             if isempty(obj.LOCAL_DEMAND)
+%                 %no destination
+%             else
+%                 %Check whether agent is within service radius of desired target
+%                 if Distance(obj.position,obj.D(1).position) <= obj.D(1).serviceRadius
+%                     %Has target been serviced?
+%                     if targets(obj.D(1).UID).serviced == 1
+%                         %Remove from local demand
+%                         obj.D(1) = [];
+%                     else
+%                         %service target???? should have been done in
+%                         %CheckTargetRadius
+%                         throw(MException('LocalAgent:hasArrived','hasArrived function error'));
+%                     end
+%                 end
+%             end
+            
+        end%function
+        
+        function obj = consolidate(obj)
+            
+            
+            obj = obj.sortReceivedTargets();
+            %fprintf('Sorting received information: 
+            obj = obj.removeServicedTargetsFromDemand();
+            obj = obj.consolidateDemands();
+            
+%            Check if C_LOCAL needs to be reset
+%            if (size(obj.C_LOCAL,1) == 0)
+%                obj.C_LOCAL = obj.C_GLOBAL;
+%                obj.C_str = ones(1,size(obj.C_GLOBAL,1));
+%            end
+            
+        end%function
+        
+        function obj = sortReceivedTargets(obj)
+            for i=1:size(obj.RECEIVED_TARGETS,1)
+                if obj.RECEIVED_TARGETS(i).serviced == 1
+                    %Add to B
+                    obj.B = addTarget(obj.B,obj.RECEIVED_TARGETS(i),obj.ROBOT_INDEX);
+                else
+                    obj.D_GLOBAL = addTarget(obj.D_GLOBAL,obj.RECEIVED_TARGETS(i),obj.ROBOT_INDEX);
+                end
+            end
+            for i=1:size(obj.SENSED_TARGETS,1)
+                %Add to D_GLOBAL
+                obj.D_GLOBAL = addTarget(obj.D_GLOBAL,obj.SENSED_TARGETS,obj.ROBOT_INDEX);
+            end
+                
+            obj.SENSED_TARGETS = [];
+            obj.RECEIVED_TARGETS = [];
+        end%function
+        
+        function obj = removeServicedTargetsFromDemand(obj)
+            %Sorts through targets in D looking for target who have already
+            %been serviced in B
+            if ~isempty(obj.D_GLOBAL) && ~isempty(obj.B)
+                
+                DEMAND = obj.D_GLOBAL;
+                for i=1:size(obj.D_GLOBAL,1)
+                    for j=1:size(obj.B,1)
+                        if obj.D_GLOBAL(i).UID == obj.B(j).UID
+                            %remove target from demand
+                            DEMAND = removeTarget(DEMAND,obj.B(j).UID);
+                            obj.D = removeTarget(obj.D,obj.B(j).UID);
+                        end
+                    end
+                end
+                obj.D_GLOBAL = DEMAND;
+            end
+        
+        end%function
+        
+        function obj = consolidateDemands(obj)
+            
+            %Must be called after new information has arrived
+            %Sorts through every entry in D and D_GLOBAL, when match is
+            %found, function discerns which EST is lower and removes the
+            %target from the appropriate demand
+            %if global EST is smaller, remove from D
+            %if local EST is smaller, remove from D_GLOBAL
+            
+            DEMAND = obj.D;
+            GLOBAL_DEMAND = obj.D_GLOBAL;
+            
+            if ~isempty(obj.D) && ~isempty(obj.D_GLOBAL)
+                for i=1:size(obj.D,1)
+                    for j=1:size(obj.D_GLOBAL,1)
+                        if obj.D(i).UID == obj.D_GLOBAL(j).UID
+                            %Compare to find which set contains smaller EST
+                            if obj.D(i).EXPECTED_SERVICE_TIME <= obj.D_GLOBAL(j).EXPECTED_SERVICE_TIME
+                                GLOBAL_DEMAND = removeTarget(GLOBAL_DEMAND,obj.D_GLOBAL(j).UID);
+                            else
+                                DEMAND = removeTarget(DEMAND,obj.D(i).UID);
+                            end
+                        end
+                    end
+                    %obj.D_GLOBAL = removeTarget(obj.D_GLOBAL,obj.D(i).UID);
+                end
+            end
+            
+            obj.D = DEMAND;
+            obj.D_GLOBAL = GLOBAL_DEMAND;
+
+        end%function
+        
+        function obj = resetBitString(obj)
+            
+            %Sort through C_GLOBAL creating bit string
+            obj.C_string = zeros(1,size(obj.C_GLOBAL,1));
+            
+        end%function
+        
+        function obj = addExpStr(obj,string)
+            
+            %Only to be done if local reset time is less than that of
+            %receiving agent
+            obj.C_string = obj.C_string | string;
+            
+        end%function
+        
+        function obj = setLocalExpTour(obj)
+            
+            %Called every timestep
+            %Do 1-Tour on exploration points
+
+            obj.C_LOCAL = Rathinam1(obj,obj.C_LOCAL);
+
+        end%function
+        
+        
+    end % methods
+    
+end % class

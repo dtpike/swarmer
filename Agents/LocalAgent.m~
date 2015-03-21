@@ -1,0 +1,124 @@
+classdef LocalAgent < Agent
+    %LOCAL AGENT Subclass of Agent - 
+    %
+    % Written by David Pike - David.Pike@rmc.ca
+    % September 16, 2011
+    
+    properties
+        %no extra properties needed
+        D;              %Local demand
+        D_received;     %Demand received from neighbours
+        LOCAL_DEMAND;
+        R_SENSE;
+        R_COMM;
+        FLAG_NEW_INFO = 1;
+    end
+    
+    methods
+        function obj = LocalAgent()
+            %constructor
+            obj = obj@Agent();
+        end
+        
+        function obj = Service_Target(obj, target, time)
+
+            global targets
+            
+            %Check to ensure target has not already been serviced
+            CURRENT_UID = target.UID;
+            current_target = findTargetFromUID(targets,CURRENT_UID);
+            fprintf('Robot %d servicing target %d\n',obj.ROBOT_INDEX,CURRENT_UID);
+            
+            if (current_target.serviced == 0);
+                %Remove target from tour
+                obj.LOCAL_DEMAND = obj.LOCAL_DEMAND(2:end,:);
+                %Update time serviced
+                targets(CURRENT_UID).timeServiced = time;
+                targets(CURRENT_UID).serviceTime = targets(CURRENT_UID).timeServiced - targets(CURRENT_UID).timeCreated;
+                targets(CURRENT_UID).serviced = 1;
+                
+            else%otherwise????
+                obj.LOCAL_DEMAND(1) = [];
+                %wtf, why did you send me here?
+            end 
+        end
+        
+        function obj = Update_Velocity(obj)
+            %called at each time step to update robot's velocity and
+            %direction          
+            % follow tour
+            if isempty(obj.LOCAL_DEMAND)
+                obj.velMag = 0;
+            else
+                % set direction to next target
+                %fprintf('Robot %d moving towards target %d\n',obj.ROBOT_INDEX,obj.LOCAL_DEMAND(1).UID);
+                target = obj.LOCAL_DEMAND(1);
+                vel = target.position - obj.position;
+                obj.velocity = vel/norm(vel);
+                obj.velMag = obj.agentVelocity;
+            end
+        end % function
+        
+        function obj = OptimizeTour(obj)
+            
+            %Optimize tour of local known demand - for now Christofides
+            %algorithm
+            if (size(obj.LOCAL_DEMAND,1) > 1 && obj.FLAG_NEW_INFO)
+                size_demand = size(obj.LOCAL_DEMAND,1);
+                obj.LOCAL_DEMAND = Rathinam1(obj,obj.LOCAL_DEMAND);
+                size_demand2 = size(obj.LOCAL_DEMAND,1);
+                
+                
+                if size_demand ~= size_demand2
+                    fprintf('Warning: OptimizeTour\n');
+                end
+                obj.FLAG_NEW_INFO = 0;
+            end
+            
+        end %function
+        
+        function obj = SenseTargets(obj)
+
+            global targets
+            %Check if any global targets are within R_SENSE of agent
+            %fprintf('Checking %d global targets\n',size(targets,1));
+            
+            for i=1:size(targets,1);
+                
+                %Check if target position is within R_SENSE
+                if Distance(targets(i).position,obj.position) <= obj.R_SENSE;
+                    %fprintf('Target %d within R_SENSE of robot %d\n',i,obj.ROBOT_INDEX);
+                    
+                    %Verify target is not already within LOCAL_DEMAND
+                    new_target = 1;
+
+                    %Check local demand for target i
+                    %If for loop makes it through all iterations, target is
+                    %new
+                    %obj.LOCAL_DEMAND
+                    for j=1:size(obj.LOCAL_DEMAND,1)
+                        %Check if target i UID matches local demand j UID
+
+                        if (targets(i).UID == obj.LOCAL_DEMAND(j).UID);
+                            %Flag target represented in LOCAL_DEMAND
+                            new_target = 0;
+                            break;
+                        end
+                    end %for
+   
+                    %if new_target, add to LOCAL_DEMAND
+                    if new_target == 1;
+                        obj.LOCAL_DEMAND = [obj.LOCAL_DEMAND; targets(i)];
+                        obj.FLAG_NEW_INFO = 1;
+                        fprintf('New target added!\n');
+                    end
+                end %if
+            end %for
+            
+            fprintf('%d targets within LOCAL_DEMAND of robot %d\n',size(obj.LOCAL_DEMAND,1),obj.ROBOT_INDEX);
+            
+        end%function
+            
+    end % methods
+    
+end % class
